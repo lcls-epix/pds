@@ -168,13 +168,6 @@ def merge_repos(source, dest):
     subprocess.check_call(shlex.split(cmd))
     os.chdir(current_dir)
 
-#convert_repo('SConsTools')
-#repos = ['psana', 'xtcav']
-
-# psana dependencies
-#psana_dependencies = ['AppUtils', 'ConfigSvc', 'ErrSvc', 'ExpNameDb', 'IData',
-#         'MsgLogger', 'PSEnv', 'PSEvt', 'PSHist', 'PSTime', 'psddl_psana']
-
 with open('repos2.txt', 'r') as fh:
     repos = fh.read().splitlines()
 
@@ -186,9 +179,3 @@ def run(repo):
 
 pool = multiprocessing.Pool()
 pool.map(run, repos)
-
-#for dep in psana_dependencies:
-#    merge_repos(dep, 'psana')
-
-#delete_repo('SConsTools')
-#push_repo('SConsTools')
