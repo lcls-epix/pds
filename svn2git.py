@@ -1,7 +1,10 @@
 import os
 import re
+import json
 import time
 import shlex
+import argparse
+import requests
 import tempfile
 import subprocess
 import multiprocessing
@@ -12,7 +15,6 @@ TOKEN = ''
 def get_lastest_tag(tagurl='.'):
     cmd = 'git ls-remote --tags %s' %tagurl
     output = subprocess.check_output(shlex.split(cmd), encoding='utf-8')
-    # check stderr
     tags = [l.split('\t')[1] for l in output.splitlines()]
     r = re.compile('.*?/(V\d\d-\d\d-\d\d)')
     prod_tags = []
@@ -27,9 +29,9 @@ def get_lastest_tag(tagurl='.'):
         return None
     return prod_tags[-1]
 
-def svn_authors(repo, file_name):
-    cmd  = '''svn log https://pswww.slac.stanford.edu/svn-readonly/psdmrepo/%s \
-            --xml --quiet | grep author | sort -u ''' %repo
+def svn_authors(url, file_name):
+    cmd  = '''svn log %s \
+            --xml --quiet | grep author | sort -u ''' %url
 
     authors = subprocess.check_output(cmd, shell=True, encoding='utf-8').splitlines()
     with open(file_name, 'w') as fh:
@@ -45,7 +47,10 @@ def svn_authors(repo, file_name):
             fh.write('%s = %s <%s>\n' %(author, name, email))
         fh.write('(no author) = no author <no_author@nowhere.com>')
 
-def convert_repo(repo):
+def convert_repo(url):
+    if not os.path.isdir('repos'):
+        os.mkdir('repos')
+    repo = url[url.rfind('/')+1:]
     dest = os.path.join('repos', repo)
     if os.path.isdir(dest):
         print('Destination directory already exists')
@@ -54,11 +59,10 @@ def convert_repo(repo):
 
     print('%s Start converting %s' %(time.ctime(), repo))
     _, author_file = tempfile.mkstemp('.txt')
-    svn_authors(repo, author_file)
-
-    cmd = '''git svn clone https://pswww.slac.stanford.edu/svn-readonly/psdmrepo/%s \
+    svn_authors(url, author_file)
+    cmd = '''git svn clone %s \
                      --stdlayout --no-metadata \
-                     --authors-file=%s --prefix "" %s''' %(repo, author_file, dest)
+                     --authors-file=%s --prefix "" %s''' %(url, author_file, dest)
     _ = subprocess.check_output(shlex.split(cmd))
     current_dir = os.getcwd()
     os.chdir(dest)
@@ -80,10 +84,6 @@ def convert_repo(repo):
 
     cmd = 'git branch -d trunk'
     _ = subprocess.check_output(shlex.split(cmd))
-
-    if repo == 'psana':
-        cmd = 'git tag -d HEAD'
-        subprocess.check_call(shlex.split(cmd))
 
     # if conda branch exists merge it pack into master and tag release
     cmd = 'git branch --list conda'
@@ -113,11 +113,6 @@ def merge_conda_branch(repo):
     subprocess.check_call(shlex.split(cmd))
 
 def push_repo(repo):
-    # create repository on github
-    #cmd = '''curl -u weninc:%s https://api.github.com/orgs/lcls-psana/repos \
-    #         -d "{\"name\": \"%s\"}" ''' %(TOKEN, repo)
-    #subprocess.check_call(shlex.split(cmd))
-
     dest = os.path.join('repos', repo)
     current_dir = os.getcwd()
     os.chdir(dest)
@@ -131,11 +126,18 @@ def push_repo(repo):
     subprocess.check_call(shlex.split(cmd))
     os.chdir(current_dir)
 
+def create_repo(repo):
+    data = {'name': repo, 'description': ''}
+    r = requests.post('https://api.github.com/orgs/lcls-psana/repos',
+                      data=json.dumps(data), auth=('weninc', TOKEN))
+    if r.status_code != 201:
+        print('Error in creating repo %s' %repo)
+
 def delete_repo(repo):
-    cmd = '''curl -X DELETE -u weninc:%s  \
-             https://api.github.com/repos/lcls-psana/%s''' %(TOKEN, repo)
-    print(cmd)
-    subprocess.check_call(cmd, shell=True)
+    r = requests.delete('https://api.github.com/repos/lcls-psana/%s' %repo,
+                        auth=('weninc', TOKEN))
+    if r.status_code != 204:
+        print('Error in deleting repo %s' %repo)
 
 def prepare_repos_merge(repo):
     current_dir = os.getcwd()
@@ -171,11 +173,18 @@ def merge_repos(source, dest):
 with open('repos2.txt', 'r') as fh:
     repos = fh.read().splitlines()
 
-print(repos)
-
 def run(repo):
-    if convert_repo(repo):
+    if convert_repo('https://pswww.slac.stanford.edu/svn-readonly/psdmrepo/', repo):
+        create_repo(repo)
         push_repo(repo)
 
-pool = multiprocessing.Pool()
-pool.map(run, repos)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Covert svn repositories to git')
+    parser.add_argument('-u','--url', help='url for svn repository', required=True, type=str)
+    parser.add_argument('--psdm', help='convert psdm repositories', required=False, type=bool)
+    args = parser.parse_args()
+    if args.psdm:
+        pool = multiprocessing.Pool()
+        pool.map(run, repos)
+    else:
+        convert_repo(args.url)
