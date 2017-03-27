@@ -14,7 +14,7 @@ TOKEN = ''
 
 def get_lastest_tag(tagurl='.'):
     cmd = 'git ls-remote --tags %s' %tagurl
-    output = subprocess.check_output(shlex.split(cmd), encoding='utf-8')
+    output = subprocess.check_output(shlex.split(cmd)).decode('utf-8')
     tags = [l.split('\t')[1] for l in output.splitlines()]
     r = re.compile('.*?/(V\d\d-\d\d-\d\d)')
     prod_tags = []
@@ -33,7 +33,7 @@ def svn_authors(url, file_name):
     cmd  = '''svn log %s \
             --xml --quiet | grep author | sort -u ''' %url
 
-    authors = subprocess.check_output(cmd, shell=True, encoding='utf-8').splitlines()
+    authors = subprocess.check_output(cmd, shell=True).decode('utf-8').splitlines()
     with open(file_name, 'w') as fh:
         for author in authors:
             author = re.search('.*>(.*?)<.*', author).group(1)
