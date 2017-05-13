@@ -84,7 +84,7 @@ unsigned TimerServiceRoutine::armTimer() {
     if (_timer->task()->parameters().name()) {
       sprintf(taskname, "%sTimer", _timer->task()->parameters().name());
     } else {
-      sprintf(taskname, "%d_Timer", _timer->task()->parameters().taskID());
+      sprintf(taskname, "%lu_Timer", (long unsigned int) _timer->task()->parameters().taskID());
     }
     int taskpriority = _timer->task()->parameters().priority();
     _service_task = new Task(TaskObject(taskname, taskpriority));

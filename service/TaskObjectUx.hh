@@ -34,7 +34,7 @@ class TaskObject {
   //  int flags() const {return _flags;}
   char* stackBase() const {return (char*)_stackbase;}
   int stackSize() const {return _stacksize;}
-  int taskID() const {return (int)_threadID;}
+  pthread_t taskID() const {return _threadID;}
 
   friend class Task;
  private:
