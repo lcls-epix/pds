@@ -12,7 +12,7 @@ class Pds::Gsc16aiOccurrence {
     Gsc16aiOccurrence(Gsc16aiManager *mgr);
     ~Gsc16aiOccurrence();
     void outOfOrder(void);
-    void userMessage(char *msgText);
+    void userMessage(const char *msgText);
 
   private:
     Gsc16aiManager* _mgr;

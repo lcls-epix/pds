@@ -381,7 +381,7 @@ int gsc16ai_dev::calibrate() {
 int gsc16ai_dev::waitEventInBufThrL2H(int timeout_ms)
 {
   int rv = gsc16ai_dev::waitEventError;
-  gsc_wait_t  gWait = {0, 0, AI32SSC_WAIT_GSC_IN_BUF_THR_L2H, 0, 0, timeout_ms, 0};
+  gsc_wait_t  gWait = {0, 0, AI32SSC_WAIT_GSC_IN_BUF_THR_L2H, 0, 0, (unsigned) timeout_ms, 0};
 
   if (ai32ssc_dsl_ioctl(_fd, AI32SSC_IOCTL_WAIT_EVENT, &gWait)) {
     fprintf(stderr, "Error: ioctl AI32SSC_IOCTL_WAIT_EVENT\n");

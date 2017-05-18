@@ -18,6 +18,7 @@ packages += lecroy
 packages += pvdaq
 packages += monreq
 packages += archon
+packages += gsc16ai
 
 ifneq ($(findstring x86_64,$(tgt_arch)),)
   packages += firewire jungfrau
@@ -25,7 +26,7 @@ ifneq ($(findstring x86_64,$(tgt_arch)),)
 #  packages += phasics
 else
   packages += encoder acqiris \
-              princeton gsc16ai
+              princeton
 endif
 ##  No DDL
 #  packages += xamps

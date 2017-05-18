@@ -5,7 +5,9 @@
 #ifndef __16AI32SSC_DSL_HH
 #define __16AI32SSC_DSL_HH
 
-#include "driver/16ai32ssc.h"
+#include "gsc16ai/include/16ai32ssc.h"
+
+#define AI32SSC_DEV_BASE_NAME   "/dev/" AI32SSC_BASE_NAME
 
 // prototypes	***************************************************************
 

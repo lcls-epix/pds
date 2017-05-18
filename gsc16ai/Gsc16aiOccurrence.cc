@@ -31,7 +31,7 @@ void Gsc16aiOccurrence::outOfOrder(void)
   _mgr->appliance().post(occ);
 }
 
-void Gsc16aiOccurrence::userMessage(char *msgText)
+void Gsc16aiOccurrence::userMessage(const char *msgText)
 {
   // send occurrence: user message
   UserMessage* msg = new (_userMessagePool) UserMessage;
