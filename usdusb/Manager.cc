@@ -46,8 +46,8 @@ namespace Pds {
 	  ;
 	}
 	else {
-	  long nRecords = MAX_RECORDS;
-          const int tmo = 100; // milliseconds
+	  int nRecords = MAX_RECORDS;
+    const int tmo = 100; // milliseconds
 	  int status = USB4_ReadFIFOBufferStruct(_dev, 
 						 &nRecords,
 						 _records,
