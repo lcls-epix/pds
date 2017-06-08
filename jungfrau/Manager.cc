@@ -38,10 +38,10 @@ namespace Pds {
         if (_buffer) {
           if (sz > _frame_sz) {
             delete[] _buffer;
-            _buffer = new char[sz];
+            _buffer = new char[sizeof(JungfrauDataType) + sz];
           }
         } else {
-          _buffer = new char[sz];
+          _buffer = new char[sizeof(JungfrauDataType) + sz];
         }
         _frame_sz = sz;
       }
