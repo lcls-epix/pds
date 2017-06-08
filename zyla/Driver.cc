@@ -51,9 +51,9 @@ namespace Pds {
 
 using namespace Pds::Zyla;
 
-
-Driver::Driver(AT_H cam) :
+Driver::Driver(AT_H cam, unsigned nbuffers) :
   _cam(cam),
+  _nbuffers(nbuffers),
   _open(cam!=AT_HANDLE_UNINITIALISED),
   _queued(false),
   _buffer_size(0),
@@ -237,17 +237,20 @@ bool Driver::configure(const AT_64 nframes)
     if(_data_buffer) {
       if (_buffer_size > old_buffer_size) {
         delete[] _data_buffer;
-        _data_buffer = new unsigned char[_buffer_size];
+        _data_buffer = new unsigned char[_buffer_size*_nbuffers];
       }
     } else {
-      _data_buffer = new unsigned char[_buffer_size];
+      _data_buffer = new unsigned char[_buffer_size*_nbuffers];
     }
 
-    int retcode = AT_QueueBuffer(_cam, _data_buffer, _buffer_size);
-    if(retcode != AT_SUCCESS) {
+    int retcode;
+    for (unsigned i=0; i<_nbuffers; i++) {
+      retcode = AT_QueueBuffer(_cam, &_data_buffer[i*_buffer_size], _buffer_size);
+      if(retcode != AT_SUCCESS) {
         fprintf(stderr, "Failed adding image buffer to queue: %s\n", ErrorCodes::name(retcode));
         flush();
         return false;
+      }
     }
     _queued = true;
 
@@ -359,7 +362,7 @@ bool Driver::get_frame(AT_64& timestamp, uint16_t* data)
     }
 
     // Reuse the buffer for the next frame
-    AT_QueueBuffer(_cam, _data_buffer, _buffer_size);
+    AT_QueueBuffer(_cam, buffer, _buffer_size);
 
     return success;
   } else {

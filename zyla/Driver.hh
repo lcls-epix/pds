@@ -10,7 +10,7 @@ namespace Pds {
   namespace Zyla {
     class Driver {
       public:
-        Driver(AT_H cam);
+        Driver(AT_H cam, unsigned nbuffers=1);
         ~Driver();
       public:
         bool set_image(AT_64 width, AT_64 height, AT_64 orgX, AT_64 orgY, AT_64 binX, AT_64 binY, bool noise_filter, bool blemish_correction, bool fast_frame=true);
@@ -73,6 +73,7 @@ namespace Pds {
         bool at_set_bool(const AT_WC* feature, bool value);
       private:
         AT_H            _cam;
+        unsigned        _nbuffers;
         bool            _open;
         bool            _queued;
         int             _buffer_size;
