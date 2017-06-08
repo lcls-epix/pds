@@ -37,7 +37,7 @@ ifneq ($(findstring x86_64-rhel6,$(tgt_arch)),)
 endif
 
 ifneq ($(findstring x86_64-rhel7,$(tgt_arch)),)
-	packages += 
+  packages += zyla
 endif
 
 
