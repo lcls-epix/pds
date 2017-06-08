@@ -55,6 +55,7 @@ using namespace Pds::Zyla;
 Driver::Driver(AT_H cam) :
   _cam(cam),
   _open(cam!=AT_HANDLE_UNINITIALISED),
+  _queued(false),
   _buffer_size(0),
   _data_buffer(0),
   _stride(0),
@@ -72,9 +73,15 @@ Driver::~Driver()
 bool Driver::set_image(AT_64 width, AT_64 height, AT_64 orgX, AT_64 orgY, AT_64 binX, AT_64 binY, bool noise_filter, bool blemish_correction, bool fast_frame)
 {
   // Setup the image size
+  if (at_get_int(AT3_AOI_H_BIN) != 1) { // clear past binning settings
+    set_config_int(AT3_AOI_H_BIN, 1LL);
+  }
   set_config_int(AT3_AOI_WIDTH, width);
   set_config_int(AT3_AOI_LEFT, orgX);
   set_config_int(AT3_AOI_H_BIN, binX);
+  if (at_get_int(AT3_AOI_V_BIN) != 1) { // clear past binning settings
+    set_config_int(AT3_AOI_V_BIN, 1LL);
+  }
   set_config_int(AT3_AOI_HEIGHT, height);
   set_config_int(AT3_AOI_TOP, orgY);
   set_config_int(AT3_AOI_V_BIN, binY);
@@ -192,6 +199,9 @@ bool Driver::configure(const AT_64 nframes)
   AT_64 img_size_bytes;
   int old_buffer_size = _buffer_size;
 
+  // flush any queued buffers
+  if (_queued) flush();
+
   // set metadata settings
   set_config_bool(AT3_METADATA_ENABLE, true);
   set_config_bool(AT3_METADATA_TIMESTAMP, true);
@@ -232,6 +242,15 @@ bool Driver::configure(const AT_64 nframes)
     } else {
       _data_buffer = new unsigned char[_buffer_size];
     }
+
+    int retcode = AT_QueueBuffer(_cam, _data_buffer, _buffer_size);
+    if(retcode != AT_SUCCESS) {
+        fprintf(stderr, "Failed adding image buffer to queue: %s\n", ErrorCodes::name(retcode));
+        flush();
+        return false;
+    }
+    _queued = true;
+
     return true;
   } else {
     fprintf(stderr, "Failed to retrieve image buffer size from camera!\n");
@@ -241,24 +260,33 @@ bool Driver::configure(const AT_64 nframes)
 
 bool Driver::start()
 {
-  if (AT_QueueBuffer(_cam, _data_buffer, _buffer_size) != AT_SUCCESS) {
-    fprintf(stderr, "Failed adding image buffer to queue! - abort acquistion start\n");
-    return false;
-  }
   return (AT_Command(_cam, AT3_ACQUISITION_START) == AT_SUCCESS);
 }
 
-bool Driver::stop()
+bool Driver::stop(bool flush_buffers)
 {
+  bool acq_stop = true;
   if (AT_Command(_cam, AT3_ACQUISITION_STOP) != AT_SUCCESS) {
     fprintf(stderr, "Stop acquistion command failed!\n");
+    acq_stop = false;
   }
-  return (AT_Flush(_cam) == AT_SUCCESS);
+  if (flush_buffers) {
+    return flush() && acq_stop;
+  } else {
+    return acq_stop;
+  }
+}
+
+bool Driver::flush()
+{
+  if (AT_Flush(_cam) == AT_SUCCESS) _queued = false;
+  return !_queued;
 }
 
 bool Driver::close()
 {
   if (_open) {
+    if (_queued) flush();
     _open = false;
     int retcode = AT_Close(_cam);
     _cam = AT_HANDLE_UNINITIALISED;
@@ -336,9 +364,7 @@ bool Driver::get_frame(AT_64& timestamp, uint16_t* data)
     return success;
   } else {
     // Acquistion failed flush the buffer before re-adding it to the queue
-    if (retcode == AT_ERR_NODATA) {
-      printf("Aquistion ended - stopping buffer wait\n");
-    } else {
+    if (retcode != AT_ERR_NODATA) {
       fprintf(stderr, "Failure waiting for buffer callback from camera: %s\n", ErrorCodes::name(retcode));
     }
     return false;
@@ -379,6 +405,22 @@ AT_64 Driver::image_height() const {
   return at_get_int(AT3_AOI_HEIGHT);
 }
 
+AT_64 Driver::image_orgX() const {
+  return at_get_int(AT3_AOI_LEFT);
+}
+
+AT_64 Driver::image_orgY() const {
+  return at_get_int(AT3_AOI_TOP);
+}
+
+AT_64 Driver::image_binX() const {
+  return at_get_int(AT3_AOI_H_BIN);
+}
+
+AT_64 Driver::image_binY() const {
+  return at_get_int(AT3_AOI_V_BIN);
+}
+
 double Driver::readout_time() const
 {
   return at_get_float(AT3_READOUT_TIME);
@@ -407,6 +449,13 @@ double Driver::temperature() const
 double Driver::exposure() const
 {
   return at_get_float(AT3_EXPOSURE_TIME);
+}
+
+bool Driver::overlap_mode() const
+{
+  AT_BOOL overlap;
+  AT_GetBool(_cam, AT3_SENSOR_COOLING, &overlap);
+  return (overlap == AT_TRUE);
 }
 
 bool Driver::cooling_on() const
@@ -488,16 +537,28 @@ bool Driver::wait_cooling(unsigned timeout, bool is_stable) const
 
 bool Driver::get_cooling_status(AT_WC* buffer, int buffer_size) const
 {
-  int retcode;
-  int temp_idx;
+  return at_get_enum(AT3_TEMPERATURE_STATUS, buffer, buffer_size);
+}
 
-  retcode = AT_GetEnumIndex(_cam, AT3_TEMPERATURE_STATUS, &temp_idx);
-  if (retcode == AT_SUCCESS) {
-    retcode = AT_GetEnumStringByIndex(_cam, AT3_TEMPERATURE_STATUS, temp_idx, buffer, buffer_size);
-  }
-  
-  return retcode;
-} 
+bool Driver::get_shutter_mode(AT_WC* buffer, int buffer_size) const
+{
+  return at_get_enum(AT3_SHUTTERING_MODE, buffer, buffer_size);
+}
+
+bool Driver::get_trigger_mode(AT_WC* buffer, int buffer_size) const
+{
+  return at_get_enum(AT3_TRIGGER_MODE, buffer, buffer_size);
+}
+
+bool Driver::get_gain_mode(AT_WC* buffer, int buffer_size) const
+{
+  return at_get_enum(AT3_PREAMP_GAIN_MODE, buffer, buffer_size);
+}
+
+bool Driver::get_readout_rate(AT_WC* buffer, int buffer_size) const
+{
+  return at_get_enum(AT3_PIXEL_READOUT_RATE, buffer, buffer_size);
+}
 
 bool Driver::get_name(AT_WC* buffer, int buffer_size) const
 {
@@ -563,6 +624,19 @@ double Driver::at_get_float(const AT_WC* feature) const
   if (AT_GetFloat(_cam, feature, &value) != AT_SUCCESS)
     fprintf(stderr, "Failed to retrieve %ls from camera!\n", feature);
   return value;
+}
+
+bool Driver::at_get_enum(const AT_WC* feature, AT_WC* buffer, int buffer_size) const
+{
+  int retcode;
+  int feature_idx;
+
+  retcode = AT_GetEnumIndex(_cam, feature, &feature_idx);
+  if (retcode == AT_SUCCESS) {
+    retcode = AT_GetEnumStringByIndex(_cam, feature, feature_idx, buffer, buffer_size);
+  }
+
+  return retcode;
 }
 
 bool Driver::at_set_int(const AT_WC* feature, const AT_64 value)
