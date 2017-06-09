@@ -34,6 +34,7 @@ namespace Pds {
         _last_frame(0),
         _diff_frame(0),
         _clock_rate(0),
+        _num_diff(0),
         _frame_sz(0),
         _buffer(0),
         _frame_ptr(0),
@@ -50,7 +51,7 @@ namespace Pds {
         }
       }
       void disable() { _disable=true ; }
-      void reset_diff() { _diff_frame=0; }
+      void reset_diff() { _diff_frame=0; _num_diff=0; }
       void set_clock_rate(AT_64 clock_rate) { _clock_rate=clock_rate; }
       AT_64 convert_time(AT_64 clock_ticks) {
         if (_clock_rate < 1) {
@@ -83,8 +84,13 @@ namespace Pds {
             if (_last_frame != 0) {
               if (_diff_frame != 0) {
                 if ((_current_frame - _last_frame)  > ((3 * _diff_frame) / 2)) {
-                  fprintf(stderr, "Warning: FrameReader exceptional period: got period of %lld ms, but expected %lld ms\n",
-                          convert_time(_current_frame - _last_frame), convert_time(_diff_frame));
+                  if ((_num_diff < 10) || (_num_diff % 100 == 0)) {
+                    fprintf(stderr, "Warning: FrameReader exceptional period: got period of %lld ms, but expected %lld ms\n",
+                            convert_time(_current_frame - _last_frame), convert_time(_diff_frame));
+                  }
+                  _num_diff++;
+                } else {
+                  _num_diff = 0; // saw expected time diff reset count
                 }
               } else {
                 _diff_frame = _current_frame - _last_frame;
@@ -105,6 +111,7 @@ namespace Pds {
       AT_64       _last_frame;
       AT_64       _diff_frame;
       AT_64       _clock_rate;
+      unsigned    _num_diff;
       unsigned    _frame_sz;
       char*       _buffer;
       uint16_t*   _frame_ptr;
