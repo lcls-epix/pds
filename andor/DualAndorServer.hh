@@ -93,6 +93,8 @@ private:
   static const int      _iMaxLastEventTime      = EB_TIMEOUT_SLOW_MS; // Max readout time for the last event
   static const int      _iMaxEventReport        = 20;                 // Only report some statistics and non-critical errors in the first few L1 events
   static const int      _iTestExposureStartDelay= 12500;              // Acq delay to use during initTest()
+  static const int      _iReadoutBackoffTime    = 100;                // Readout backoff time in ms
+  static const int      _iMaxReadoutAttempts    = 10;                 // Number of times to retry camera readout
   static const float    _fEventDeltaTimeFactor;                       // Event delta time factor, for detecting sequence error
 
   /*
@@ -148,6 +150,8 @@ private:
   int   resetCooling();
   int   setupCooling(double fCoolingTemperature);
   int   updateTemperatureData();
+  int   getAcqFrameWithRetry(uint16_t* liImageData, int iImageSize);
+  int   getOldestFrameWithRetry(uint16_t* liImageData, int iImageSize);
   //int   checkSequence( const Datagram& datagram );
 
   /*

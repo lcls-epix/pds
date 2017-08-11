@@ -2056,7 +2056,7 @@ int DualAndorServer::getDataInBeamRateMode(InDatagram* in, InDatagram*& out)
     uint8_t* pImageSlave  = (uint8_t*) out + _iFrameHeaderSize + _iDetectorSensor*sizeof(float);
     uint8_t* pImageMaster = pImageSlave + _iImageWidth*_iImageHeight*sizeof(uint16_t);
     if (checkMasterSelected()) {
-      int iError = GetOldestImage16((uint16_t*)pImageMaster, _iImageWidth*_iImageHeight);
+      int iError = getOldestFrameWithRetry((uint16_t*)pImageMaster, _iImageWidth*_iImageHeight);
       if (!isAndorFuncOk(iError))
       {
         printf("DualAndorServer::getDataInBeamRateMode(): GetOldestImage16(): %s\n", AndorErrorCodes::name(iError));
@@ -2067,7 +2067,7 @@ int DualAndorServer::getDataInBeamRateMode(InDatagram* in, InDatagram*& out)
       bFrameError = true;
     }
     if (checkSlaveSelected()) {
-      int iError = GetOldestImage16((uint16_t*)pImageSlave, _iImageWidth*_iImageHeight);
+      int iError = getOldestFrameWithRetry((uint16_t*)pImageSlave, _iImageWidth*_iImageHeight);
       if (!isAndorFuncOk(iError))
       {
         printf("DualAndorServer::getDataInBeamRateMode(): GetOldestImage16(): %s\n", AndorErrorCodes::name(iError));
@@ -2226,7 +2226,7 @@ int DualAndorServer::waitForNewFrameAvailable()
   uint8_t* pImageSlave = (uint8_t*) _pDgOut + _iFrameHeaderSize + _iDetectorSensor*sizeof(float);
   uint8_t* pImageMaster  = pImageSlave + _iImageWidth*_iImageHeight*sizeof(uint16_t);
   if (checkMasterSelected()) {
-    iErrorMaster = GetAcquiredData16((uint16_t*)pImageMaster, _iImageWidth*_iImageHeight);
+    iErrorMaster = getAcqFrameWithRetry((uint16_t*)pImageMaster, _iImageWidth*_iImageHeight);
     if (!isAndorFuncOk(iErrorMaster))
     {
       printf("GetAcquiredData16() (hcam = %d): %s\n", (int) _hCamMaster, AndorErrorCodes::name(iErrorMaster));
@@ -2237,7 +2237,7 @@ int DualAndorServer::waitForNewFrameAvailable()
     return ERROR_SDK_FUNC_FAIL;
   }
   if (checkSlaveSelected()) {
-    iErrorSlave = GetAcquiredData16((uint16_t*)pImageSlave, _iImageWidth*_iImageHeight);
+    iErrorSlave = getAcqFrameWithRetry((uint16_t*)pImageSlave, _iImageWidth*_iImageHeight);
     if (!isAndorFuncOk(iErrorSlave))
     {
       printf("GetAcquiredData16() (hcam = %d): %s\n", (int) _hCamSlave, AndorErrorCodes::name(iErrorSlave));
@@ -2452,11 +2452,10 @@ bool DualAndorServer::checkSlaveSelected()
 
 int DualAndorServer::updateTemperatureData()
 {
-  int iError;
   if (checkMasterSelected())
-    iError = GetTemperature(&_iTemperatureMaster);
+    GetTemperature(&_iTemperatureMaster);
   if (checkSlaveSelected())
-    iError = GetTemperature(&_iTemperatureSlave);
+    GetTemperature(&_iTemperatureSlave);
 
   /*
    * Set Info object
@@ -2486,6 +2485,42 @@ int DualAndorServer::updateTemperatureData()
   }
 
   return 0;
+}
+
+int DualAndorServer::getAcqFrameWithRetry(uint16_t* liImageData, int iImageSize)
+{
+  int iError = 0;
+  int iAttempts = 0;
+  while (iAttempts < _iMaxReadoutAttempts) {
+    iError = GetAcquiredData16(liImageData, iImageSize);
+    if (isAndorFuncOk(iError)) {
+      break;
+    }
+    iAttempts++;
+    timeval timeSleepMicro = {0, iAttempts * _iReadoutBackoffTime * 1000}; // in milliseconds
+    // use select() to simulate nanosleep(), because experimentally select() controls the sleeping time more precisely
+    select( 0, NULL, NULL, NULL, &timeSleepMicro);
+  }
+
+  return iError;
+}
+
+int DualAndorServer::getOldestFrameWithRetry(uint16_t* liImageData, int iImageSize)
+{
+  int iError = 0;
+  int iAttempts = 0;
+  while (iAttempts < _iMaxReadoutAttempts) {
+    iError = GetOldestImage16(liImageData, iImageSize);
+    if (isAndorFuncOk(iError)) {
+      break;
+    }
+    iAttempts++;
+    timeval timeSleepMicro = {0, iAttempts * _iReadoutBackoffTime * 1000}; // in milliseconds
+    // use select() to simulate nanosleep(), because experimentally select() controls the sleeping time more precisely
+    select( 0, NULL, NULL, NULL, &timeSleepMicro);
+  }
+
+  return iError;
 }
 
 static int _printCaps(AndorCapabilities &caps)
@@ -2624,6 +2659,8 @@ const int       DualAndorServer::_iMaxReadoutTime;
 const int       DualAndorServer::_iMaxThreadEndTime;
 const int       DualAndorServer::_iMaxLastEventTime;
 const int       DualAndorServer::_iMaxEventReport;
+const int       DualAndorServer::_iReadoutBackoffTime;
+const int       DualAndorServer::_iMaxReadoutAttempts;
 const int       DualAndorServer::_iTestExposureStartDelay;
 const float     DualAndorServer::_fEventDeltaTimeFactor = 1.01f;
 
