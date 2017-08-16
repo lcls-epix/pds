@@ -10,6 +10,7 @@
 
 #include <new>
 
+using namespace Pds;
 using namespace Pds::UsdUsb;
 
 Fex::Fex(CfgClientNfs& cfg) :

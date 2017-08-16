@@ -50,6 +50,8 @@ namespace Pds {
   };
 };
 
+using namespace Pds;
+
 static void load_filter(char*       arg,
                         Appliance*& apps)
 {

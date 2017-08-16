@@ -3,6 +3,8 @@
 
 #include <stdio.h>
 
+using namespace Pds;
+
 int L3TIterator::process(Xtc* xtc)
 {
   if (xtc->contains.id()==TypeId::Id_Xtc) {
