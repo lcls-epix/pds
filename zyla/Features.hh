@@ -5,6 +5,7 @@
 
 namespace Pds {
   namespace Zyla {
+    static const AT_WC* AT3_AOI_BINNING = L"AOIBinning";
     static const AT_WC* AT3_AOI_H_BIN = L"AOIHBin";
     static const AT_WC* AT3_AOI_HEIGHT = L"AOIHeight";
     static const AT_WC* AT3_AOI_LEFT = L"AOILeft";
@@ -49,6 +50,7 @@ namespace Pds {
     static const AT_WC* AT3_SOFTWARE_VERSION = L"SoftwareVersion";
     static const AT_WC* AT3_CAMERA_PRESENT = L"CameraPresent";
     static const AT_WC* AT3_METADATA_ENABLE = L"MetadataEnable";
+    static const AT_WC* AT3_METADATA_FRAME_INFO = L"MetadataFrameInfo";
     static const AT_WC* AT3_METADATA_TIMESTAMP = L"MetadataTimestamp";
     static const AT_WC* AT3_TIMESTAMP_CLOCK = L"TimestampClock";
     static const AT_WC* AT3_TIMESTAMP_FREQUENCY = L"TimestampClockFrequency";

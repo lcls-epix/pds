@@ -46,6 +46,11 @@ namespace Pds {
     static const AT_WC* AT3_STABILISED = L"Stabilised";
     static const AT_WC* AT3_COOLER_OFF = L"Cooler Off";
     static const AT_WC* AT3_PIXEL_MONO_16 = L"Mono16";
+    static const AT_WC* AT3_BINNING_1X1 = L"1x1";
+    static const AT_WC* AT3_BINNING_2X2 = L"2x2";
+    static const AT_WC* AT3_BINNING_3X3 = L"3x3";
+    static const AT_WC* AT3_BINNING_4X4 = L"4x4";
+    static const AT_WC* AT3_BINNING_8X8 = L"8x8";
   }
 }
 
@@ -73,18 +78,41 @@ Driver::~Driver()
 bool Driver::set_image(AT_64 width, AT_64 height, AT_64 orgX, AT_64 orgY, AT_64 binX, AT_64 binY, bool noise_filter, bool blemish_correction, bool fast_frame)
 {
   // Setup the image size
-  if (at_get_int(AT3_AOI_H_BIN) != 1) { // clear past binning settings
-    set_config_int(AT3_AOI_H_BIN, 1LL);
+  if (at_check_implemented(AT3_AOI_H_BIN) && at_check_implemented(AT3_AOI_V_BIN)) {
+    if (at_get_int(AT3_AOI_H_BIN) != 1) { // clear past binning settings
+      set_config_int(AT3_AOI_H_BIN, 1LL);
+    }
+    if (at_get_int(AT3_AOI_V_BIN) != 1) { // clear past binning settings
+      set_config_int(AT3_AOI_V_BIN, 1LL);
+    }
+  } else {
+    if (!at_set_enum(AT3_AOI_BINNING, AT3_BINNING_1X1)) {
+      fprintf(stderr, "Unable to set the binning mode of the camera to %ls!\n", AT3_BINNING_1X1);
+      return false;
+    }
   }
   set_config_int(AT3_AOI_WIDTH, width);
   set_config_int(AT3_AOI_LEFT, orgX);
-  set_config_int(AT3_AOI_H_BIN, binX);
-  if (at_get_int(AT3_AOI_V_BIN) != 1) { // clear past binning settings
-    set_config_int(AT3_AOI_V_BIN, 1LL);
-  }
   set_config_int(AT3_AOI_HEIGHT, height);
   set_config_int(AT3_AOI_TOP, orgY);
-  set_config_int(AT3_AOI_V_BIN, binY);
+  if (at_check_implemented(AT3_AOI_H_BIN) && at_check_implemented(AT3_AOI_V_BIN)) {
+    set_config_int(AT3_AOI_H_BIN, binX);
+    set_config_int(AT3_AOI_V_BIN, binY);
+  } else if (binX == binY) {
+    switch(binX) {
+      set_enum_case(AT3_AOI_BINNING, 1, AT3_BINNING_1X1);
+      set_enum_case(AT3_AOI_BINNING, 2, AT3_BINNING_2X2);
+      set_enum_case(AT3_AOI_BINNING, 3, AT3_BINNING_3X3);
+      set_enum_case(AT3_AOI_BINNING, 4, AT3_BINNING_4X4);
+      set_enum_case(AT3_AOI_BINNING, 8, AT3_BINNING_8X8);
+    default:
+      fprintf(stderr, "Unsupported binnig setting: %lldx%lld\n", binX, binY);
+        return false;
+    }
+  } else {
+    fprintf(stderr, "Binning of %lldx%lld is not allowed, the camera only supports symmetric binning!\n", binX, binY);
+    return false;
+  }
   // Enable/Disable the on FPGA image corrections
   set_config_bool(AT3_NOISE_FILTER, noise_filter);
   set_config_bool(AT3_BLEMISH_CORRECTION, blemish_correction);
@@ -97,8 +125,8 @@ bool Driver::set_cooling(bool enable, ZylaConfigType::CoolingSetpoint setpoint, 
 {
   // Enable cooling
   set_config_bool(AT3_SENSOR_COOLING, enable);
-  // Set Cooling setpoint
-  if (at_check_write(AT3_TEMPERATURE_CONTROL)) {
+  // Set Cooling setpoint (only if cooling is enabled)
+  if (at_check_write(AT3_TEMPERATURE_CONTROL) && enable) {
     switch(setpoint) {
       set_enum_case(AT3_TEMPERATURE_CONTROL, ZylaConfigType::Temp_0C,     L"0.00");
       set_enum_case(AT3_TEMPERATURE_CONTROL, ZylaConfigType::Temp_Neg5C,  L"-5.00");
@@ -327,37 +355,50 @@ bool Driver::get_frame(AT_64& timestamp, uint16_t* data)
       fprintf(stderr, "Failure retrieving timestamp from frame metadata\n");
       success = false;
     }
-    if (AT_GetWidthFromMetadata(buffer, _buffer_size, width) != AT_SUCCESS) {
-      fprintf(stderr, "Failure retrieving timestamp from frame metadata\n");
-      success = false;
-    }
-    if (AT_GetHeightFromMetadata(buffer, _buffer_size, height) != AT_SUCCESS) {
-      fprintf(stderr, "Failure retrieving timestamp from frame metadata\n");
-      success = false;
-    }
-    if (AT_GetStrideFromMetadata(buffer, _buffer_size, stride) != AT_SUCCESS) {
-      fprintf(stderr, "Failure retrieving timestamp from frame metadata\n");
-      success = false;
-    }
-    // Check if the metadata matches with the expected frame size
-    if ((width != _width) || (height != _height) || (stride != _stride)) {
-      fprintf(stderr,
-              "Unexpected frame size returned by camera: width (%lld vs %lld), height (%lld vs %lld), stride (%lld vs %lld)\n",
-              width,
-              _width,
-              height,
-              _height,
-              stride,
-              _stride);
-      success = false;
-    }
-  
-    // If the metadata looks good convert the buffer to a usable image an return it
-    if (success) {
-      retcode = AT_ConvertBufferUsingMetadata(buffer, reinterpret_cast<unsigned char*>(data), _buffer_size, AT3_PIXEL_MONO_16);
-      if (retcode != AT_SUCCESS) {
-        fprintf(stderr, "Failure converting data buffer to image using metadata: %s\n", ErrorCodes::name(retcode));
+    if (at_check_implemented(AT3_METADATA_FRAME_INFO)) {
+      if (AT_GetWidthFromMetadata(buffer, _buffer_size, width) != AT_SUCCESS) {
+        fprintf(stderr, "Failure retrieving timestamp from frame metadata\n");
         success = false;
+      }
+      if (AT_GetHeightFromMetadata(buffer, _buffer_size, height) != AT_SUCCESS) {
+        fprintf(stderr, "Failure retrieving timestamp from frame metadata\n");
+        success = false;
+      }
+      if (AT_GetStrideFromMetadata(buffer, _buffer_size, stride) != AT_SUCCESS) {
+        fprintf(stderr, "Failure retrieving timestamp from frame metadata\n");
+        success = false;
+      }
+      // Check if the metadata matches with the expected frame size
+      if ((width != _width) || (height != _height) || (stride != _stride)) {
+        fprintf(stderr,
+                "Unexpected frame size returned by camera: width (%lld vs %lld), height (%lld vs %lld), stride (%lld vs %lld)\n",
+                width,
+                _width,
+                height,
+                _height,
+                stride,
+                _stride);
+        success = false;
+      }
+    
+  
+      // If the metadata looks good convert the buffer to a usable image an return it
+      if (success) {
+        retcode = AT_ConvertBufferUsingMetadata(buffer, reinterpret_cast<unsigned char*>(data), _buffer_size, AT3_PIXEL_MONO_16);
+        if (retcode != AT_SUCCESS) {
+          fprintf(stderr, "Failure converting data buffer to image using metadata: %s\n", ErrorCodes::name(retcode));
+          success = false;
+        }
+      }
+
+    } else {
+      // No frame metadata for camlink cameras
+      if (success) {
+        retcode = AT_ConvertBuffer(buffer, reinterpret_cast<unsigned char*>(data), _width, _height, _stride, AT3_PIXEL_MONO_16, AT3_PIXEL_MONO_16);
+        if (retcode != AT_SUCCESS) {
+          fprintf(stderr, "Failure converting data buffer to image: %s\n", ErrorCodes::name(retcode));
+          success = false;
+        }
       }
     }
 
@@ -596,6 +637,16 @@ bool Driver::get_interface_type(AT_WC* buffer, int buffer_size) const
 bool Driver::get_sdk_version(AT_WC* buffer, int buffer_size) const
 {
   return at_get_string(AT3_SOFTWARE_VERSION, buffer, buffer_size);
+}
+
+bool Driver::at_check_implemented(const AT_WC* feature) const
+{
+  AT_BOOL implemented;
+  if (AT_IsImplemented(_cam, feature, &implemented) != AT_SUCCESS) { 
+    fprintf(stderr, "Unable to get the implementation status of %ls from the camera\n", feature);
+    return false;
+  }
+  return implemented;
 }
 
 bool Driver::at_check_write(const AT_WC* feature) const

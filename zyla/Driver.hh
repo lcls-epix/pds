@@ -62,6 +62,7 @@ namespace Pds {
         bool get_interface_type(AT_WC* buffer, int buffer_size) const;
         bool get_sdk_version(AT_WC* buffer, int buffer_size) const;
       private:
+        bool at_check_implemented(const AT_WC* feature) const;
         bool at_check_write(const AT_WC* feature) const;
         bool at_get_string(const AT_WC* feature, AT_WC* buffer, int buffer_size) const;
         AT_64 at_get_int(const AT_WC* feature) const;
