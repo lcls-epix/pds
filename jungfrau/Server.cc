@@ -10,7 +10,7 @@
 using namespace Pds::Jungfrau;
 
 Server::Server( const Src& client )
-  : _xtc( _jungfrauDataType, client ), _count(0), _framesz(0), _last_frame(-1)
+  : _xtc( _jungfrauDataType, client ), _count(0), _framesz(0), _last_frame(0), _first_frame(true)
 {
   _xtc.extent = sizeof(JungfrauDataType) + sizeof(Xtc);
   int err = ::pipe(_pfd);
@@ -32,14 +32,15 @@ int Server::fetch( char* payload, int flags )
     return -1;
   }
 
-  int32_t current_frame = *(int32_t*) xtc.payload();
+  uint64_t current_frame = *(uint64_t*) xtc.payload();
   // Check that the frame count is sequential
-  if (_last_frame < 0) {
+  if (_first_frame) {
     _last_frame = current_frame;
+    _first_frame = false;
     _count++;
   } else {
     if (current_frame - _last_frame > 1) {
-      fprintf(stderr, "Error: expected frame %d instead of %d - it appears that %d frames have been dropped\n", _last_frame+1, current_frame, (current_frame - _last_frame - 1));
+      fprintf(stderr, "Error: expected frame %lu instead of %lu - it appears that %lu frames have been dropped\n", _last_frame+1, current_frame, (current_frame - _last_frame - 1));
     }
     _count+=(current_frame-_last_frame);
   }

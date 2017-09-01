@@ -3,7 +3,7 @@
 void Pds::PrincetonData::setTemperature(PrincetonDataType& d,
                                         float t)
 {
-  *new(&d) PrincetonDataType(d.shotIdStart(),
-                             d.readoutTime(),
-                             t);
+  new(&d) PrincetonDataType(d.shotIdStart(),
+                            d.readoutTime(),
+                            t);
 }

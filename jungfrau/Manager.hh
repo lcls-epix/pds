@@ -6,11 +6,11 @@ namespace Pds {
   class CfgClientNfs;
   class Fsm;
   namespace Jungfrau {
-    class Driver;
+    class Detector;
     class Server;
     class Manager {
     public:
-      Manager (Driver&, Server&, CfgClientNfs&);
+      Manager (Detector&, Server&, CfgClientNfs&);
       ~Manager();
     public:
       Appliance& appliance();

@@ -18,7 +18,6 @@
 #define MSG_LEN 256
 
 // Temporary fixed sizes :(
-#define NUM_MODULES 1
 #define NUM_ROWS 512
 #define NUM_COLUMNS 1024
 
@@ -53,15 +52,38 @@ static socklen_t clientaddrlen = sizeof(clientaddr);
 #pragma pack(2)
   struct jungfrau_dgram {
     char emptyheader[6];
-    uint32_t reserved;
-    char packetnum;
-    char framenum[3];
+    uint64_t framenum;
+    uint32_t exptime;
+    uint32_t packetnum;
     uint64_t bunchid;
-    /* uint64_t framenum;   //  modified dec 15 */
-    /* uint64_t packetnum;     */
+    uint64_t timestamp;
+    uint16_t moduleID;
+    uint16_t xCoord;
+    uint16_t yCoord;
+    uint16_t zCoord;
+    uint32_t debug;
+    uint16_t roundRobin;
+    uint8_t detectortype;
+    uint8_t headerVersion;
     uint16_t data[DATA_ELEM];
   };
 #pragma pack(pop)
+
+struct frame_thread_args {
+  uint64_t* frame;
+  uint16_t* data;
+  JungfrauModInfoType* metadata; 
+  Module* module;
+  bool status;
+};
+
+static void* frame_thread(void* args_ptr)
+{
+  frame_thread_args* args = (frame_thread_args*) args_ptr;
+   args->status = args->module->get_frame(args->frame, args->metadata, args->data);
+
+  return NULL;
+}
 
 DacsConfig::DacsConfig(uint16_t vb_ds, uint16_t vb_comp, uint16_t vb_pixbuf, uint16_t vref_ds,
                        uint16_t vref_comp, uint16_t vref_prech, uint16_t vin_com, uint16_t  vdd_prot):
@@ -86,7 +108,7 @@ uint16_t DacsConfig::vref_prech() const { return _vref_prech; }
 uint16_t DacsConfig::vin_com() const    { return _vin_com; }
 uint16_t DacsConfig::vdd_prot() const   { return _vdd_prot; }
 
-Driver::Driver(const int id, const char* control, const char* host, unsigned port, const char* mac, const char* det_ip, bool config_det_ip) :
+Module::Module(const int id, const char* control, const char* host, unsigned port, const char* mac, const char* det_ip, bool config_det_ip) :
   _id(id), _control(control), _host(host), _port(port), _mac(mac), _det_ip(det_ip),
   _socket(-1), _connected(false), _boot(true),
   _sockbuf_sz(sizeof(jungfrau_dgram)*PACKET_NUM*EVENTS_TO_BUFFER), _readbuf_sz(sizeof(jungfrau_dgram)), _frame_sz(DATA_ELEM * sizeof(uint16_t)), _frame_elem(DATA_ELEM),
@@ -123,23 +145,15 @@ Driver::Driver(const int id, const char* control, const char* host, unsigned por
     put_command_print("detectormac", "00:aa:bb:cc:dd:ee");
     std::string cfgmac_reply = put_command("configuremac", 0);
     printf("cmd_put configuremac: %s\n", cfgmac_reply.c_str());
-    if (!strcmp(cfgmac_reply.c_str(), "3")) {
+    if (!strcmp(cfgmac_reply.c_str(), "3") || !strcmp(cfgmac_reply.c_str(), "0")) {
       detmac_status = true;
       printf("detector udp_rx interface is up\n");
-    } else if (!strcmp(cfgmac_reply.c_str(), "0")) {
-      printf("detector udp_rx interface did not come up - attempting server restart\n");
-      put_command_print("exitserver", 0);
-      sleep(1);
-      cfgmac_reply = put_command("configuremac", 0);
-      if (!strcmp(cfgmac_reply.c_str(), "3")) {
-        detmac_status = true;
-        printf("detector udp_rx interface is up\n");
-      } else {
-        printf("detector udp_rx interface did not come up - server restart failed!\n");
-      }
+    } else {
+      error_print("Error: detector udp_rx interface did not come up\n");
     }
   } else {
     printf("detector udp_rx interface is being set externally\n");
+    detmac_status = true;
   }
 
   hostent* entries = gethostbyname(host);
@@ -164,7 +178,7 @@ Driver::Driver(const int id, const char* control, const char* host, unsigned por
   }
 }
 
-Driver::~Driver()
+Module::~Module()
 {
   if (_socket >= 0) {
     ::close(_socket);
@@ -184,7 +198,7 @@ Driver::~Driver()
   }
 }
 
-bool Driver::configure(uint64_t nframes, JungfrauConfigType::GainMode gain, JungfrauConfigType::SpeedMode speed, double trig_delay, double exposure_time, double exposure_period, uint32_t bias, const DacsConfig& dac_config)
+bool Module::configure(uint64_t nframes, JungfrauConfigType::GainMode gain, JungfrauConfigType::SpeedMode speed, double trig_delay, double exposure_time, double exposure_period, uint32_t bias, const DacsConfig& dac_config)
 {
   if (!_connected) {
     error_print("Error: failed to connect to Jungfrau at address %s\n", _control);
@@ -255,14 +269,16 @@ bool Driver::configure(uint64_t nframes, JungfrauConfigType::GainMode gain, Jung
     switch (speed) {
     case JungfrauConfigType::Quarter:
       printf("setting detector to quarter speed\n");
-      put_register_print(0x59, 0x8981);
-      put_register_print(0x42, 0x10);
-      put_register_print(0x5d, 0xf0000f00);
+      put_register_print(0x59, 0x2810);
+      put_register_print(0x4d, 0x00000000);
+      put_register_print(0x42, 0x0f);
+      put_register_print(0x5d, 0x00000f00);
       put_command_print("adcphase", 25);
       break;
     case JungfrauConfigType::Half:
       printf("setting detector to half speed\n");
-      put_register_print(0x59, 0x7f7c);
+      put_register_print(0x59, 0x1000);
+      put_register_print(0x4d, 0x00100000);
       put_register_print(0x42, 0x20);
       put_register_print(0x5d, 0x00000f00);
       put_command_print("adcphase", 65);
@@ -335,12 +351,12 @@ bool Driver::configure(uint64_t nframes, JungfrauConfigType::GainMode gain, Jung
   return status() != ERROR;
 }
 
-bool Driver::check_size(uint32_t num_modules, uint32_t num_rows, uint32_t num_columns)
+bool Module::check_size(uint32_t num_rows, uint32_t num_columns) const
 {
-  return (num_modules == NUM_MODULES) && (num_rows == NUM_ROWS) && (num_columns == NUM_COLUMNS);
+  return (num_rows == NUM_ROWS) && (num_columns == NUM_COLUMNS);
 }
 
-std::string Driver::put_command(const char* cmd, const char* value, int pos)
+std::string Module::put_command(const char* cmd, const char* value, int pos)
 {
   if (strlen(cmd) >= CMD_LEN || strlen(value) >= CMD_LEN) {
     return "invalid command or value length";
@@ -354,7 +370,7 @@ std::string Driver::put_command(const char* cmd, const char* value, int pos)
   }
 }
 
-std::string Driver::put_command(const char* cmd, const short value, int pos)
+std::string Module::put_command(const char* cmd, const short value, int pos)
 {
   if (strlen(cmd) >= CMD_LEN) {
     return "invalid command or value length";
@@ -364,7 +380,7 @@ std::string Driver::put_command(const char* cmd, const short value, int pos)
   return _det->putCommand(2, _cmdbuf, pos);
 }
 
-std::string Driver::put_command(const char* cmd, const unsigned short value, int pos)
+std::string Module::put_command(const char* cmd, const unsigned short value, int pos)
 {
   if (strlen(cmd) >= CMD_LEN) {
     return "invalid command or value length";
@@ -374,7 +390,7 @@ std::string Driver::put_command(const char* cmd, const unsigned short value, int
   return _det->putCommand(2, _cmdbuf, pos);
 }
 
-std::string Driver::put_command(const char* cmd, const int value, int pos)
+std::string Module::put_command(const char* cmd, const int value, int pos)
 {
   if (strlen(cmd) >= CMD_LEN) {
     return "invalid command or value length";
@@ -384,7 +400,7 @@ std::string Driver::put_command(const char* cmd, const int value, int pos)
   return _det->putCommand(2, _cmdbuf, pos); 
 }
 
-std::string Driver::put_command(const char* cmd, const unsigned int value, int pos)
+std::string Module::put_command(const char* cmd, const unsigned int value, int pos)
 {
   if (strlen(cmd) >= CMD_LEN) {
     return "invalid command or value length";
@@ -394,7 +410,7 @@ std::string Driver::put_command(const char* cmd, const unsigned int value, int p
   return _det->putCommand(2, _cmdbuf, pos);
 }
 
-std::string Driver::put_command(const char* cmd, const long value, int pos)
+std::string Module::put_command(const char* cmd, const long value, int pos)
 {
   if (strlen(cmd) >= CMD_LEN) {
     return "invalid command or value length";
@@ -404,7 +420,7 @@ std::string Driver::put_command(const char* cmd, const long value, int pos)
   return _det->putCommand(2, _cmdbuf, pos);
 }
 
-std::string Driver::put_command(const char* cmd, const unsigned long value, int pos)
+std::string Module::put_command(const char* cmd, const unsigned long value, int pos)
 {
   if (strlen(cmd) >= CMD_LEN) {
     return "invalid command or value length";
@@ -414,7 +430,7 @@ std::string Driver::put_command(const char* cmd, const unsigned long value, int 
   return _det->putCommand(2, _cmdbuf, pos);
 }
 
-std::string Driver::put_command(const char* cmd, const long long value, int pos)
+std::string Module::put_command(const char* cmd, const long long value, int pos)
 {
   if (strlen(cmd) >= CMD_LEN) {
     return "invalid command or value length";
@@ -424,7 +440,7 @@ std::string Driver::put_command(const char* cmd, const long long value, int pos)
   return _det->putCommand(2, _cmdbuf, pos);
 }
 
-std::string Driver::put_command(const char* cmd, const unsigned long long value, int pos)
+std::string Module::put_command(const char* cmd, const unsigned long long value, int pos)
 {
   if (strlen(cmd) >= CMD_LEN) {
     return "invalid command or value length";
@@ -434,7 +450,7 @@ std::string Driver::put_command(const char* cmd, const unsigned long long value,
   return _det->putCommand(2, _cmdbuf, pos);
 }
 
-std::string Driver::put_command(const char* cmd, const double value, int pos)
+std::string Module::put_command(const char* cmd, const double value, int pos)
 {
   if (strlen(cmd) >= CMD_LEN) {
     return "invalid command or value length";
@@ -444,7 +460,7 @@ std::string Driver::put_command(const char* cmd, const double value, int pos)
   return _det->putCommand(2, _cmdbuf, pos);
 }
 
-std::string Driver::get_command(const char* cmd, int pos)
+std::string Module::get_command(const char* cmd, int pos)
 {
   if (strlen(cmd) >= CMD_LEN) {
     return "invalid command or value length";
@@ -453,7 +469,7 @@ std::string Driver::get_command(const char* cmd, int pos)
   return _det->getCommand(1, _cmdbuf, pos);
 }
 
-std::string Driver::put_register(const int reg, const int value, int pos)
+std::string Module::put_register(const int reg, const int value, int pos)
 {
   strcpy(_cmdbuf[0], REG);
   sprintf(_cmdbuf[1], "%#x", reg);
@@ -461,7 +477,7 @@ std::string Driver::put_register(const int reg, const int value, int pos)
   return _det->putCommand(3, _cmdbuf, pos);
 }
 
-std::string Driver::put_adcreg(const int reg, const int value, int pos)
+std::string Module::put_adcreg(const int reg, const int value, int pos)
 {
   strcpy(_cmdbuf[0], ADCREG);
   sprintf(_cmdbuf[1], "%#x", reg);
@@ -469,7 +485,7 @@ std::string Driver::put_adcreg(const int reg, const int value, int pos)
   return _det->putCommand(3, _cmdbuf, pos);
 }
 
-std::string Driver::setbit(const int reg, const int bit, int pos)
+std::string Module::setbit(const int reg, const int bit, int pos)
 {
   strcpy(_cmdbuf[0], SETBIT);
   sprintf(_cmdbuf[1], "%#x", reg);
@@ -477,7 +493,7 @@ std::string Driver::setbit(const int reg, const int bit, int pos)
   return _det->putCommand(3, _cmdbuf, pos);
 }
 
-std::string Driver::clearbit(const int reg, const int bit, int pos)
+std::string Module::clearbit(const int reg, const int bit, int pos)
 {
   strcpy(_cmdbuf[0], CLEARBIT);
   sprintf(_cmdbuf[1], "%#x", reg);
@@ -485,15 +501,14 @@ std::string Driver::clearbit(const int reg, const int bit, int pos)
   return _det->putCommand(3, _cmdbuf, pos);
 }
 
-uint64_t Driver::nframes()
+uint64_t Module::nframes()
 {
   std::string reply = get_command("nframes");
   return strtoull(reply.c_str(), NULL, 10);
 }
 
-Driver::Status Driver::status()
+Module::Status Module::status(const std::string& reply)
 {
-  std::string reply = get_command("status");
   if (!strcmp(reply.c_str(), "waiting"))
     return WAIT;
   else if (!strcmp(reply.c_str(), "idle"))
@@ -506,18 +521,25 @@ Driver::Status Driver::status()
     return ERROR;
 }
 
-std::string Driver::status_str()
+Module::Status Module::status()
+{
+  std::string reply = get_command("status");
+  return status(reply);
+}
+
+std::string Module::status_str()
 {
   return get_command("status");
 }
 
-bool Driver::start()
+bool Module::start()
 {
-  printf("starting detector: %s\n", put_command("status", "start").c_str());
-  return status() == RUNNING || status() == WAIT;
+  std::string reply = put_command("status", "start");
+  printf("starting detector: %s\n", reply.c_str());
+  return status(reply) == RUNNING || status(reply) == WAIT;
 }
 
-bool Driver::stop()
+bool Module::stop()
 {
   std::string reply = put_command("status", "stop");
   if (!strcmp(reply.c_str(), "error")) {
@@ -526,10 +548,10 @@ bool Driver::stop()
   } else {
     printf("stopping detector: %s\n", reply.c_str());
   }
-  return status() != RUNNING;
+  return status(reply) != RUNNING;
 }
 
-void Driver::reset()
+void Module::reset()
 {
   printf("reseting run control ...");
   // reset mem machine fifos fifos
@@ -541,47 +563,243 @@ void Driver::reset()
   printf(" done\n");
 }
 
-int32_t Driver::get_frame(uint16_t* data)
+bool Module::get_frame(uint64_t* frame, uint16_t* data)
+{
+  return get_frame(frame, NULL, data);
+}
+
+bool Module::get_frame(uint64_t* frame, JungfrauModInfoType* metadata, uint16_t* data)
 {
   int nb;
-  int packetnum_fixed = -1;
-  int32_t frame = -1;
-  int32_t pframe = 0;
-  bool drop = false;
+  unsigned npackets = 0;
+  uint64_t cur_frame = 0;
+  bool first_packet = true;
+  bool last_packet = false;
+  jungfrau_dgram* packet = NULL;
 
-  for (int i=0; i<PACKET_NUM; i++) {
+  while (!last_packet) {
     nb = ::recvfrom(_socket, _readbuf, sizeof(jungfrau_dgram), 0, (struct sockaddr *)&clientaddr, &clientaddrlen);
     if (nb<0) {
       fprintf(stderr,"Error: failure receiving packet from Jungfru at %s on port %d: %s\n", _host, _port, strerror(errno));
-      return -1;
-    }
-    jungfrau_dgram* packet = (jungfrau_dgram*) _readbuf;
-    packetnum_fixed = (PACKET_NUM-1) - packet->packetnum;
-
-    if (packetnum_fixed != i) {
-      fprintf(stderr,"Error: data out-of-order received packet %d, but was expecting packet %d\n", packetnum_fixed, i);
-      i = packetnum_fixed;
-      drop = true;
+      return false;
     }
 
-    memcpy(&pframe, packet->framenum, sizeof(char)*3);
-    if (frame < 1) {
-      frame = pframe;
-    } else if(frame != pframe) {
-      fprintf(stderr,"Error: data out-of-order got data for frame %d, but was expecting frame %d\n", pframe, frame);
-      return -1;
+    packet = (jungfrau_dgram*) _readbuf;
+
+    if (first_packet) {
+      cur_frame = packet->framenum;
+      first_packet = false;
+    } else if(cur_frame != packet->framenum) {
+      fprintf(stderr,"Error: data out-of-order got data for frame %lu, but was expecting frame %lu\n", packet->framenum, cur_frame);
+      return false;
     }
     
-    memcpy(&data[_frame_elem*i], packet->data, _frame_sz);
+    memcpy(&data[_frame_elem*packet->packetnum], packet->data, _frame_sz);
+    last_packet = (packet->packetnum == (PACKET_NUM -1));
+    npackets++;
   }
 
-  // Drop frames where packets were missing - TODO keep these, but assert damage?
-  return drop?-1:frame;
+  if ((npackets == PACKET_NUM) && packet) {
+    *frame = cur_frame;
+    if (metadata) new(metadata) JungfrauModInfoType(packet->timestamp, packet->exptime, packet->moduleID, packet->xCoord, packet->yCoord, packet->zCoord);
+  }
+ 
+  return (npackets == PACKET_NUM);
 }
 
-const char* Driver::error()
+const char* Module::error()
 {
   return _msgbuf;
+}
+
+void Module::clear_error()
+{
+  _msgbuf[0] = 0;
+}
+
+unsigned Module::get_num_rows() const
+{
+  return NUM_ROWS;
+}
+
+unsigned Module::get_num_columns() const
+{
+  return NUM_COLUMNS;
+}
+
+unsigned Module::get_num_pixels() const
+{
+  return NUM_ROWS * NUM_COLUMNS;
+}
+
+unsigned Module::get_frame_size() const
+{
+  return NUM_ROWS * NUM_COLUMNS * sizeof(uint16_t);
+}
+
+Detector::Detector(std::vector<Module*>& modules) :
+  _threads(new pthread_t[modules.size()]),
+  _num_modules(modules.size()),
+  _module_frames(new uint64_t[modules.size()]),
+  _modules(modules),
+  _msgbuf(new const char*[modules.size()]) {}
+
+Detector::~Detector()
+{
+  for (unsigned i=0; i<_num_modules; i++) {
+    delete _modules[i];
+  }
+  _modules.clear();
+  if (_threads) delete[] _threads;
+  if (_module_frames) delete[] _module_frames;
+  if (_msgbuf) delete[] _msgbuf;
+}
+
+bool Detector::check_size(uint32_t num_modules, uint32_t num_rows, uint32_t num_columns) const
+{
+  for (unsigned i=0; i<_num_modules; i++) {
+    if (!_modules[i]->check_size(num_rows, num_columns))
+      return false;
+  }
+
+  return (num_modules == _num_modules);
+}
+
+bool Detector::configure(uint64_t nframes, JungfrauConfigType::GainMode gain, JungfrauConfigType::SpeedMode speed, double trig_delay, double exposure_time, double exposure_period, uint32_t bias, const DacsConfig& dac_config)
+{
+  bool success = true;
+
+  for (unsigned i=0; i<_num_modules; i++) {
+    if (!_modules[i]->configure(nframes, gain, speed, trig_delay, exposure_time, exposure_period, bias, dac_config)) {
+      fprintf(stderr,"Error: module %u failed to configure!\n", i);
+      success = false;
+    }
+  }
+
+  return success;
+}
+
+bool Detector::get_frame(uint64_t* frame, uint16_t* data)
+{
+  return get_frame(frame, NULL, data);
+}
+
+bool Detector::get_frame(uint64_t* frame, JungfrauModInfoType* metadata, uint16_t* data)
+{
+  bool drop_frame = false;
+  bool frame_unset = true;
+  frame_thread_args args[_num_modules];
+
+  // Start frame reading threads
+  for (unsigned i=0; i<_num_modules; i++) {
+    args[i].frame = &_module_frames[i];
+    args[i].data = data;
+    args[i].metadata = metadata;
+    args[i].module = _modules[i];
+    pthread_create(&_threads[i], NULL, frame_thread, &args);
+
+    data += _modules[i]->get_num_pixels();
+    if(metadata) metadata++;
+  }
+
+  // Wait for the threads to finish
+  for (unsigned i=0; i<_num_modules; i++) {
+    pthread_join(_threads[i], NULL);
+    if (!args[i].status) {
+      fprintf(stderr,"Error: module %u failed to return a frame!\n", i);
+      drop_frame = true;
+    }
+  }
+
+  if (!drop_frame) {
+    // Check that we got a consistent frame
+    for (unsigned i=0; i<_num_modules; i++) {
+      if (frame_unset) {
+        *frame = _module_frames[i];
+        frame_unset = false;
+      } else {
+        if (*frame != _module_frames[i]) {
+          fprintf(stderr,"Error: data out-of-order got data for module %u got frame %lu, but was expecting frame %lu\n", i, _module_frames[i], *frame);
+          drop_frame = true;
+        }
+      }
+    }
+  }
+
+  return !drop_frame;
+}
+
+bool Detector::start()
+{
+  bool success = true;
+  for (unsigned i=0; i<_num_modules; i++) {
+    if (!_modules[i]->start()) {
+      fprintf(stderr,"Error: failure starting acquistion of module %u of the detector!\n", i);
+      success = false;
+    }
+  }
+  return success;
+}
+
+bool Detector::stop()
+{
+  bool success = true;
+  for (unsigned i=0; i<_num_modules; i++) {
+    if (!_modules[i]->stop()) {
+      fprintf(stderr,"Error: failure stopping acquistion of module %u of the detector!\n", i);
+      success = false;
+    }
+  }
+  return success;
+}
+
+unsigned Detector::get_num_rows(unsigned module) const
+{
+  if (module < _num_modules) {
+    return _modules[module]->get_num_rows();
+  } else {
+    fprintf(stderr,"Error: detector does not contain module %u - only %u modules in detector!\n", module, _num_modules);
+    return 0;
+  }
+}
+
+unsigned Detector::get_num_columns(unsigned module) const
+{
+  if (module < _num_modules) {
+    return _modules[module]->get_num_columns();
+  } else {
+    fprintf(stderr,"Error: detector does not contain module %u - only %u modules in detector!\n", module, _num_modules);
+    return 0;
+  }
+}
+
+unsigned Detector::get_num_modules() const
+{
+  return _num_modules;
+}
+
+unsigned Detector::get_frame_size() const
+{
+  unsigned total_frame_size = 0;
+  for (unsigned i=0; i<_num_modules; i++) {
+    total_frame_size += _modules[i]->get_frame_size();
+  }
+  return total_frame_size;
+}
+
+const char** Detector::errors() 
+{
+  for (unsigned i=0; i<_num_modules; i++) {
+    _msgbuf[i] = _modules[i]->error();
+  }
+  return _msgbuf;
+}
+
+void Detector::clear_errors()
+{
+  for (unsigned i=0; i<_num_modules; i++) {
+    _modules[i]->clear_error();
+  }
 }
 
 #undef EVENTS_TO_BUFFER
@@ -589,7 +807,6 @@ const char* Driver::error()
 #undef DATA_ELEM
 #undef CMD_LEN
 #undef MSG_LEN
-#undef NUM_MODULES
 #undef NUM_ROWS
 #undef NUM_COLUMNS
 #undef put_command_print

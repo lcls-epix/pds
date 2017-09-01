@@ -3,24 +3,24 @@
 void Pds::EvrConfig::clearMask(EventCodeType& tc,
                                unsigned maskType)
 {
-  *new (&tc) EventCodeType(tc.code(), tc.isReadout(), tc.isCommand(), tc.isLatch(), 
-                           tc.reportDelay(), tc.reportWidth(), 
-                           (maskType&1) ? 0 : tc.maskTrigger(),
-                           (maskType&2) ? 0 : tc.maskSet(),
-                           (maskType&4) ? 0 : tc.maskClear(),
-                           tc.desc(), tc.readoutGroup());
+  new (&tc) EventCodeType(tc.code(), tc.isReadout(), tc.isCommand(), tc.isLatch(), 
+                          tc.reportDelay(), tc.reportWidth(), 
+                          (maskType&1) ? 0 : tc.maskTrigger(),
+                          (maskType&2) ? 0 : tc.maskSet(),
+                          (maskType&4) ? 0 : tc.maskClear(),
+                          tc.desc(), tc.readoutGroup());
 }
 
 void Pds::EvrConfig::setMask(EventCodeType& tc,
                              unsigned maskType,
                              unsigned maskValue)
 {
-  *new (&tc) EventCodeType(tc.code(), tc.isReadout(), tc.isCommand(), tc.isLatch(), 
-                           tc.reportDelay(), tc.reportWidth(), 
-                           tc.maskTrigger() | ((maskType&1) ? maskValue : 0),
-                           tc.maskSet    () | ((maskType&2) ? maskValue : 0),
-                           tc.maskClear  () | ((maskType&4) ? maskValue : 0),
-                           tc.desc(), tc.readoutGroup());
+  new (&tc) EventCodeType(tc.code(), tc.isReadout(), tc.isCommand(), tc.isLatch(), 
+                          tc.reportDelay(), tc.reportWidth(), 
+                          tc.maskTrigger() | ((maskType&1) ? maskValue : 0),
+                          tc.maskSet    () | ((maskType&2) ? maskValue : 0),
+                          tc.maskClear  () | ((maskType&4) ? maskValue : 0),
+                          tc.desc(), tc.readoutGroup());
 }
 
 unsigned Pds::EvrConfig::size(const EvrConfigType& c)

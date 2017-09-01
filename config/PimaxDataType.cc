@@ -3,7 +3,7 @@
 void Pds::PimaxData::setTemperature(PimaxDataType& d,
                                     float          t)
 {
-  *new (&d) PimaxDataType(d.shotIdStart(),
-                          d.readoutTime(),
-                          t);
+  new (&d) PimaxDataType(d.shotIdStart(),
+                         d.readoutTime(),
+                         t);
 }
