@@ -20,6 +20,11 @@
 #define OOPT_MINOR_BASE       128
 #endif
 
+/* The big kernel lock has been removed for newer versions of linux */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,39)
+#define OOPT_NO_BKL
+#endif
+
 /*
  * Maximal number of OOPT devices supported by this driver
  */
@@ -169,7 +174,11 @@ static struct file_operations oopt_fops = {
    * or should the open() function fail.
    */
   .owner   = THIS_MODULE,
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35))
   .ioctl   = oopt_ioctl,
+#else
+  .unlocked_ioctl = oopt_compat_ioctl,
+#endif
   .open    = oopt_open,
   .release = oopt_release,
   .read    = oopt_read,

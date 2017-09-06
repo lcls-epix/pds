@@ -4,7 +4,6 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/module.h>
-#include <linux/smp_lock.h>
 #include <linux/completion.h>
 #include <asm/uaccess.h>
 #include <linux/usb.h>
@@ -13,6 +12,16 @@
 #include <linux/pci.h>    //for scatterlist macros
 #include <linux/pagemap.h>
 #include "ooptDriver.h"
+#ifdef OOPT_NO_BKL
+#include <linux/mutex.h>
+#else
+#include <linux/smp_lock.h>
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35)
+#define usb_alloc_coherent usb_buffer_alloc
+#define usb_free_coherent usb_buffer_free
+#endif
 
 /*
  * ooptDriver.c
@@ -49,6 +58,10 @@
 
 #undef err
 #define err(format, arg...) printk(KERN_ERR KBUILD_MODNAME ": %s(): %d: " format "\n", __FUNCTION__, __LINE__, ## arg)
+
+#ifdef OOPT_NO_BKL
+DEFINE_MUTEX(oopt_openmtx);
+#endif
 
 static int debug = 0;
 
@@ -189,16 +202,16 @@ static int oopt_initDeviceInfo(DeviceInfo* pDevInfo)
     dbg("usb_alloc_urb() failed");
     return -ENOMEM;
   }
-  pUrbArmBuffer = usb_buffer_alloc(pDevInfo->udev, 1, GFP_KERNEL, &(pDevInfo->pUrbArm->transfer_dma));
+  pUrbArmBuffer = usb_alloc_coherent(pDevInfo->udev, 1, GFP_KERNEL, &(pDevInfo->pUrbArm->transfer_dma));
   if (pUrbArmBuffer == NULL)
   {
-    dbg("usb_buffer_alloc() failed");
+    dbg("usb_alloc_coherent() failed");
     return -ENOMEM;
   }
   pUrbArmBuffer[0] = 0x09;
 
   usb_fill_bulk_urb(pDevInfo->pUrbArm, pDevInfo->udev, pDevInfo->luEpAddr[ENDPOINT_COMMAND], pUrbArmBuffer,
-    1, oopt_arm_callback1, pDevInfo);
+    1, (usb_complete_t) oopt_arm_callback1, pDevInfo);
   pDevInfo->pUrbArm->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
 
   switch (pDevInfo->udev->descriptor.idProduct)
@@ -229,16 +242,16 @@ static int oopt_initDeviceInfo(DeviceInfo* pDevInfo)
     }
     pDevInfo->lUrb[iBulk]       = urb;
     pDevInfo->luUrbId[iBulk]    = iBulk;
-    pUrbBuffer = usb_buffer_alloc(pDevInfo->udev, OOPT_DATA_BULK_SIZE, GFP_KERNEL, &urb->transfer_dma);
+    pUrbBuffer = usb_alloc_coherent(pDevInfo->udev, OOPT_DATA_BULK_SIZE, GFP_KERNEL, &urb->transfer_dma);
     if (pUrbBuffer == NULL)
     {
-      dbg("usb_buffer_alloc() failed for bulk %d", iBulk);
+      dbg("usb_alloc_coherent() failed for bulk %d", iBulk);
       return -ENOMEM;
     }
 
     iEndpSpectra= (iBulk < iNumFirst2kBulk ? pDevInfo->luEpAddr[pDevInfo->iEpFirst2K] : pDevInfo->luEpAddr[ENDPOINT_DATA]);
     usb_fill_bulk_urb(urb, pDevInfo->udev, iEndpSpectra, pUrbBuffer,
-      OOPT_DATA_BULK_SIZE, oopt_arm_callback2, &pDevInfo->luUrbId[iBulk]);
+      OOPT_DATA_BULK_SIZE, (usb_complete_t) oopt_arm_callback2, &pDevInfo->luUrbId[iBulk]);
 
     if (iBulk == pDevInfo->iNumDataBulk-1)
       urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
@@ -368,12 +381,21 @@ static void oopt_disconnect(struct usb_interface *interface)
   DeviceInfo *pDevInfo;
   int minor = interface->minor;
 
+#ifdef OOPT_NO_BKL
+  mutex_lock(&oopt_openmtx);
+#else
   lock_kernel();
+#endif
   pDevInfo = usb_get_intfdata(interface);
   usb_set_intfdata(interface, NULL);
   /* give back our minor */
   usb_deregister_dev(interface, &oopt_class);
+#ifdef OOPT_NO_BKL
+  mutex_unlock(&oopt_openmtx);
+#else
   unlock_kernel();
+#endif
+  
 
   /* prevent device read and ioctl */
   pDevInfo->present = 0;
@@ -403,7 +425,7 @@ static void oopt_deleteDeviceInfo(struct kref *kref)
 
   if (pDevInfo->pUrbArm)
   {
-    usb_buffer_free(pDevInfo->pUrbArm->dev, pDevInfo->pUrbArm->transfer_buffer_length, pDevInfo->pUrbArm->transfer_buffer, pDevInfo->pUrbArm->transfer_dma);
+    usb_free_coherent(pDevInfo->pUrbArm->dev, pDevInfo->pUrbArm->transfer_buffer_length, pDevInfo->pUrbArm->transfer_buffer, pDevInfo->pUrbArm->transfer_dma);
     usb_free_urb(pDevInfo->pUrbArm);
   }
 
@@ -413,7 +435,7 @@ static void oopt_deleteDeviceInfo(struct kref *kref)
     if (urb == NULL)
       continue;
 
-    usb_buffer_free(urb->dev, urb->transfer_buffer_length, urb->transfer_buffer, urb->transfer_dma);
+    usb_free_coherent(urb->dev, urb->transfer_buffer_length, urb->transfer_buffer, urb->transfer_dma);
     usb_free_urb(urb);
   }
 
@@ -431,24 +453,33 @@ static int oopt_open(struct inode *inode, struct file *file)
   int iMinor;
   int iRetVal = 0;
 
+#ifdef OOPT_NO_BKL
+  mutex_lock(&oopt_openmtx);
+#endif
+
   iMinor = iminor(inode);
 
   interface = usb_find_interface(&oopt_driver, iMinor);
   if (!interface)
   {
     err("Can't find device for minor %d", iMinor);
-    return -ENODEV;
+    iRetVal = -ENODEV;
+    goto done;
   }
 
   pDevInfo = usb_get_intfdata(interface);
   if (!pDevInfo)
-    return -ENODEV;
+  {
+    iRetVal = -ENODEV;
+    goto done;
+  }
 
   iRetVal = oopt_reset_data(pDevInfo);
   if (iRetVal != 0)
   {
     err("oopt_reset_data() failed");
-    return -EFAULT;
+    iRetVal = -EFAULT;
+    goto done;
   }
 
   /* increment our usage count for the device */
@@ -458,7 +489,11 @@ static int oopt_open(struct inode *inode, struct file *file)
 
   dbg("set device data %p", pDevInfo);
 
-  return iRetVal;
+  done:
+#ifdef OOPT_NO_BKL
+    mutex_unlock(&oopt_openmtx);
+#endif
+    return iRetVal;
 }
 
 /**
@@ -526,27 +561,33 @@ static int oopt_ioctl(struct inode *inode, struct file *file,
   switch (cmd)
   {
   case OOPT_IOCTL_CMD_NORET:
-    copy_from_user(pDevInfo->pIoctlInfo, (void __user *) arg, sizeof(IoctlInfo));
+    if (copy_from_user(pDevInfo->pIoctlInfo, (void __user *) arg, sizeof(IoctlInfo)) != 0)
+      goto error;
     iRetVal = oopt_runCommandNoRet(pDevInfo, pDevInfo->pIoctlInfo);
     break;
   case OOPT_IOCTL_CMD_RET:
-    copy_from_user(pDevInfo->pIoctlInfo, (void __user *) arg, sizeof(IoctlInfo));
+    if (copy_from_user(pDevInfo->pIoctlInfo, (void __user *) arg, sizeof(IoctlInfo)) != 0)
+      goto error;
     iRetVal = oopt_runCommandRet(pDevInfo, pDevInfo->pIoctlInfo, (void __user *) arg);
     break;
   case OOPT_IOCTL_ARM:
-    copy_from_user(pDevInfo->pIoctlInfo, (void __user *) arg, sizeof(ArmInfo));
+    if (copy_from_user(pDevInfo->pIoctlInfo, (void __user *) arg, sizeof(ArmInfo)) != 0)
+      goto error;
     iRetVal = oopt_runArm(pDevInfo, (ArmInfo*) pDevInfo->pIoctlInfo, (void __user *) arg);
     break;
   case OOPT_IOCTL_UNARM:
-    copy_from_user(pDevInfo->pIoctlInfo, (void __user *) arg, sizeof(ArmInfo));
+    if (copy_from_user(pDevInfo->pIoctlInfo, (void __user *) arg, sizeof(ArmInfo)) != 0)
+      goto error;
     iRetVal = oopt_runUnarm(pDevInfo, (ArmInfo*) pDevInfo->pIoctlInfo, (void __user *) arg);
     break;
   case OOPT_IOCTL_POLLENABLE:
-    copy_from_user(pDevInfo->pIoctlInfo, (void __user *) arg, sizeof(PollInfo));
+    if (copy_from_user(pDevInfo->pIoctlInfo, (void __user *) arg, sizeof(PollInfo)) != 0)
+      goto error;
     iRetVal = oopt_runPollEnable(pDevInfo, (PollInfo*) pDevInfo->pIoctlInfo, (void __user *) arg);
     break;
   case OOPT_IOCTL_DEVICEINFO:
-    copy_from_user(pDevInfo->pIoctlInfo, (void __user *) arg, sizeof(QueryDeviceInfo));
+    if (copy_from_user(pDevInfo->pIoctlInfo, (void __user *) arg, sizeof(QueryDeviceInfo)) != 0)
+      goto error;
     iRetVal = oopt_runQueryDevice(pDevInfo, (QueryDeviceInfo*) pDevInfo->pIoctlInfo, (void __user *) arg);
     break;
   default:
@@ -556,6 +597,10 @@ static int oopt_ioctl(struct inode *inode, struct file *file,
   }
 
   return iRetVal;
+
+error:
+  warn("Failure of copy_from_user of ioctl command 0x%x", cmd);
+  return -EFAULT;
 }
 
 static int oopt_runCommandNoRet(DeviceInfo* pDevInfo, IoctlInfo* pIoctlInfo)
